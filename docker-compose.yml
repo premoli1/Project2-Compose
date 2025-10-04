@@ -1,0 +1,50 @@
+# docker-compose.yml
+# Purpose: Run Jenkins with Docker-in-Docker (DinD) so pipelines can build/push images.
+# Security notes:
+# - Jenkins runs as non-root by default in official image.
+# - Anonymous access will be disabled inside Jenkins UI after first start.
+# - I'll create a dedicated non-admin user for pipelines.
+
+services:
+  dind:
+    image: docker:24-dind
+    container_name: dind
+    privileged: true              # Enables DinD; required for Docker daemon in container
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - dind-certs:/certs         # TLS certs for secure docker client/server
+      - dind-cache:/var/lib/docker # Layer cache speeds up image builds
+    networks: [ci]
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    restart: unless-stopped
+    environment:
+      - DOCKER_HOST=tcp://dind:2376 # Jenkins will talk to DinD over TLS
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1
+    volumes:
+      - jenkins-home:/var/jenkins_home  # Jenkins data (jobs, plugins, config)
+      - dind-certs:/certs/client:ro      # Client certs for Docker
+    ports:
+      - "8080:8080"  # Jenkins UI
+      - "50000:50000" # Inbound agents if ever needed
+    networks: [ci]
+    depends_on:
+      dind:
+        condition: service_healthy
+
+networks:
+  ci:
+
+volumes:
+  jenkins-home:
+  dind-certs:
+  dind-cache:
